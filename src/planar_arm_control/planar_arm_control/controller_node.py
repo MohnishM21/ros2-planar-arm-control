@@ -27,14 +27,14 @@ Data flow per control tick
     backend.step(dt) (sim only) -> backend.read() -> next tick
 """
 
+from collections import deque
 import threading
 import time
-from collections import deque
 
-import numpy as np
-import rclpy
 from geometry_msgs.msg import Point
+import numpy as np
 from rcl_interfaces.msg import SetParametersResult
+import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import (MutuallyExclusiveCallbackGroup,
                                    ReentrantCallbackGroup)
@@ -87,9 +87,9 @@ class ControllerNode(Node):
                                      gp("max_joint_acceleration"))
         backend_kwargs = {}
         if gp("backend") == "sim":
-            backend_kwargs = dict(link_lengths=LINK_LENGTHS,
-                                  joint_limits=self.arm.joint_limits, q0=q0,
-                                  noise_std=gp("sim_noise_std"))
+            backend_kwargs = {"link_lengths": LINK_LENGTHS,
+                              "joint_limits": self.arm.joint_limits, "q0": q0,
+                              "noise_std": gp("sim_noise_std")}
         self.backend = make_backend(gp("backend"), **backend_kwargs)
         self.backend.set_mode(self.mode)
         self.tracker = TrackingController(self.mode)
@@ -258,8 +258,11 @@ class ControllerNode(Node):
             return self.action_active or self.state == "MOVING"
 
     def _wait_for_motion(self, goal_handle, on_progress):
-        """Block (in a command-group thread) until the active motion ends.
-        Returns 'done', 'canceled' or 'aborted'."""
+        """
+        Block (in a command-group thread) until the active motion ends.
+
+        Returns 'done', 'canceled' or 'aborted'.
+        """
         while rclpy.ok():
             with self.lock:
                 moving = self.trajectory is not None

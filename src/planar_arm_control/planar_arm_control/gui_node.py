@@ -21,22 +21,20 @@ Threading model (the graded part)
     buttons      ─▶ [GUI thread] ─▶ call_async ─────▶ controller
 """
 
-import os
+from collections import deque
 import signal
 import sys
 import threading
 import time
-from collections import deque
 
-# pyqtgraph picks the first Qt binding it finds; pin it to PyQt5 so its
-# widgets and our QApplication come from the same library.
-os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
-from PyQt5 import QtCore, QtWidgets  # noqa: E402  (must precede pyqtgraph)
-import numpy as np  # noqa: E402
-import pyqtgraph as pg  # noqa: E402
-import rclpy  # noqa: E402
+import numpy as np
+# PyQt5 must be imported before pyqtgraph: pyqtgraph binds to whichever Qt
+# library is already loaded, so its widgets match our QApplication.
+from PyQt5 import QtCore, QtWidgets
+import pyqtgraph as pg
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
+import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
@@ -84,10 +82,10 @@ class TelemetryBuffer:
 
     def snapshot(self):
         with self.lock:
-            return dict(t=np.array(self.t), q=np.array(self.q),
-                        q_ref=np.array(self.q_ref), err=np.array(self.err),
-                        latest_q=self.latest_q, status=self.latest_status,
-                        msg_count=self.msg_count)
+            return {"t": np.array(self.t), "q": np.array(self.q),
+                    "q_ref": np.array(self.q_ref), "err": np.array(self.err),
+                    "latest_q": self.latest_q, "status": self.latest_status,
+                    "msg_count": self.msg_count}
 
 
 def status_measured(status):
@@ -96,6 +94,7 @@ def status_measured(status):
 
 class RosBridge(QtCore.QObject):
     """Signals carrying ROS events into the Qt thread."""
+
     log = QtCore.pyqtSignal(str, str)                 # level, text
     move_response = QtCore.pyqtSignal(object)
     action_feedback = QtCore.pyqtSignal(object)
@@ -310,7 +309,8 @@ class MainWindow(QtWidgets.QMainWindow):
         box = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(box)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.angle_plot = pg.PlotWidget(title="Joint angles (deg) — solid: measured, dashed: reference")
+        self.angle_plot = pg.PlotWidget(
+            title="Joint angles (deg) — solid: measured, dashed: reference")
         self.angle_plot.addLegend(offset=(5, 5))
         self.angle_plot.showGrid(x=True, y=True, alpha=0.2)
         self.error_plot = pg.PlotWidget(title="Tracking error (deg)")
@@ -319,7 +319,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.error_plot.getPlotItem().vb.disableAutoRange(axis=pg.ViewBox.YAxis)
         self.angle_curves, self.ref_curves, self.err_curves = [], [], []
         for i, c in enumerate(JOINT_COLORS):
-            self.angle_curves.append(self.angle_plot.plot(pen=pg.mkPen(c, width=2), name=f"q{i+1}"))
+            self.angle_curves.append(
+                self.angle_plot.plot(pen=pg.mkPen(c, width=2), name=f"q{i + 1}"))
             self.ref_curves.append(self.angle_plot.plot(
                 pen=pg.mkPen(c, width=1, style=QtCore.Qt.DashLine)))
             self.err_curves.append(self.error_plot.plot(pen=pg.mkPen(c, width=2)))
@@ -477,7 +478,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.frame_times.append(now)
         snap = self.buffer.snapshot()
         if now - self.last_rate_check >= 1.0:
-            self.msg_rate = (snap["msg_count"] - self.last_msg_count) / (now - self.last_rate_check)
+            elapsed = now - self.last_rate_check
+            self.msg_rate = (snap["msg_count"] - self.last_msg_count) / elapsed
             self.last_msg_count = snap["msg_count"]
             self.last_rate_check = now
         fps = ((len(self.frame_times) - 1) / (self.frame_times[-1] - self.frame_times[0])
@@ -539,7 +541,8 @@ class MainWindow(QtWidgets.QMainWindow):
         ee = st.end_effector
         self.tel["State"].setText(st.state)
         self.tel["Mode"].setText(st.control_mode)
-        if self.mode_combo.currentText() != st.control_mode and not self.mode_combo.view().isVisible():
+        combo_open = self.mode_combo.view().isVisible()
+        if self.mode_combo.currentText() != st.control_mode and not combo_open:
             self.mode_combo.setCurrentText(st.control_mode)
         self.tel["Phase"].setText(st.phase or "—")
         self.tel["End-effector"].setText(f"x = {ee.x:+.3f}   y = {ee.y:+.3f}")
@@ -550,9 +553,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tel["Target"].setText(tgt)
         self.tel["Target"].setStyleSheet("color:#ff9800;" if st.target_projected else "")
         grip = "closed" if st.gripper_closed else "open"
-        self.tel["Gripper"].setText(grip + (" · holding object" if st.gripper_closed and st.has_object else ""))
+        if st.gripper_closed and st.has_object:
+            grip += " · holding object"
+        self.tel["Gripper"].setText(grip)
         self.tel["Control loop"].setText(
-            f"period {st.control_period_mean_ms:.2f} ms · max jitter {st.control_jitter_max_ms:.2f} ms")
+            f"period {st.control_period_mean_ms:.2f} ms · "
+            f"max jitter {st.control_jitter_max_ms:.2f} ms")
 
 
 def main(args=None):

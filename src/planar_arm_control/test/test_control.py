@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from planar_arm_control.hardware_interface import (ControlMode, JointCommand,
-                                                   SimulatedArm, make_backend)
+                                                   make_backend, SimulatedArm)
 from planar_arm_control.motion_planner import MotionPlanner
 from planar_arm_control.pid import PID
 from planar_arm_control.planar_arm import PlanarArm

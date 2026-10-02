@@ -18,8 +18,8 @@ No ROS imports: unit-testable and reusable by any front end.
 """
 
 import contextlib
-import io
 from dataclasses import dataclass
+import io
 from typing import Optional
 
 import numpy as np
@@ -53,8 +53,12 @@ class MotionPlanner:
 
     # -- workspace -----------------------------------------------------------
     def project_target(self, xy):
-        """Return (reachable_point, was_projected). Mirrors the library's
-        radial projection, plus clamps targets below the ground to y = 0."""
+        """
+        Return (reachable_point, was_projected).
+
+        Mirrors the library's radial projection, and also clamps targets
+        below the ground to y = 0.
+        """
         target = np.asarray(xy, float).copy()
         projected = False
         if target[1] < self.arm.min_y:
@@ -96,8 +100,11 @@ class MotionPlanner:
         return PlanResult(True, msg, requested, target, projected, q_goal)
 
     def plan_joint(self, q_current, q_goal, duration=None):
-        """Plan q_current -> q_goal; detour via home if the direct path is unsafe.
-        Returns (trajectory or None, via_home)."""
+        """
+        Plan q_current -> q_goal, detouring via home if the direct path is unsafe.
+
+        Returns (trajectory or None, via_home).
+        """
         direct = self._segment(q_current, q_goal, duration)
         if self.path_valid(direct):
             return direct, False

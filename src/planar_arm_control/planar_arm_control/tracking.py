@@ -17,16 +17,16 @@ from planar_arm_control.hardware_interface import ControlMode, JointCommand
 from planar_arm_control.pid import PID
 
 DEFAULT_GAINS = {
-    ControlMode.VELOCITY: dict(kp=[8.0, 8.0, 8.0], ki=[2.0, 2.0, 2.0],
-                               kd=[0.0, 0.0, 0.0],
-                               output_limit=[2.0, 2.5, 3.0],
-                               integral_limit=0.5),
+    ControlMode.VELOCITY: {"kp": [8.0, 8.0, 8.0], "ki": [2.0, 2.0, 2.0],
+                           "kd": [0.0, 0.0, 0.0],
+                           "output_limit": [2.0, 2.5, 3.0],
+                           "integral_limit": 0.5},
     # kp ~ J * w^2, kd ~ 2 * zeta * w * J with w ~ 17 rad/s, zeta ~ 1.
     # The integral term carries gravity, so it gets real (but bounded) authority.
-    ControlMode.EFFORT: dict(kp=[900.0, 300.0, 90.0], ki=[3000.0, 1000.0, 300.0],
-                             kd=[120.0, 40.0, 12.0],
-                             output_limit=[120.0, 50.0, 15.0],
-                             integral_limit=[80.0, 30.0, 8.0]),
+    ControlMode.EFFORT: {"kp": [900.0, 300.0, 90.0], "ki": [3000.0, 1000.0, 300.0],
+                         "kd": [120.0, 40.0, 12.0],
+                         "output_limit": [120.0, 50.0, 15.0],
+                         "integral_limit": [80.0, 30.0, 8.0]},
 }
 
 

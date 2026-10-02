@@ -72,7 +72,8 @@ class ArmBackend(ABC):
 
 
 class SimulatedArm(ArmBackend):
-    """Decoupled per-joint dynamics with gravity, for a vertical planar arm.
+    """
+    Decoupled per-joint dynamics with gravity, for a vertical planar arm.
 
         J_i * qdd_i = tau_i - b_i * qd_i - g_i(q)
 
@@ -180,7 +181,8 @@ class SimulatedArm(ArmBackend):
 
 
 class DynamixelBackend(ArmBackend):
-    """Skeleton for a real Dynamixel X-series arm (not exercised in this task).
+    """
+    Skeleton for a real Dynamixel X-series arm (not exercised in this task).
 
     Mapping a JointCommand onto the Protocol 2.0 control table:
         POSITION -> Operating Mode 3, Goal Position (addr 116), 4096 ticks/rev

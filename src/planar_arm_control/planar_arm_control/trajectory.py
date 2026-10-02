@@ -65,8 +65,12 @@ class QuinticTrajectory:
 
 
 class TrajectoryChain:
-    """A sequence of trajectories executed back to back (e.g. via a safe
-    waypoint). Looks like a single trajectory to the controller."""
+    """
+    A sequence of trajectories executed back to back.
+
+    Used to pass through a safe waypoint; looks like a single trajectory to
+    the controller.
+    """
 
     def __init__(self, segments):
         if not segments:

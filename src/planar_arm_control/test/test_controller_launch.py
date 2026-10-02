@@ -1,4 +1,5 @@
-"""Integration test: launch the real controller (no GUI) and drive it over ROS.
+"""
+Integration test: launch the real controller (no GUI) and drive it over ROS.
 
 Run with:  colcon test --packages-select planar_arm_control
 """
