@@ -17,9 +17,11 @@ reference.
   At 1 Mbps, reading position, velocity and current from 3 servos plus writing
   goal values takes roughly 1–3 ms. USB-serial adapters add their own latency:
   the FTDI default latency timer is 16 ms unless you lower it.
-- My 100 Hz Python loop shows 0.5–2 ms of jitter on a desktop. On a loaded
-  embedded computer with Python's GC and the GIL, there will be occasional
-  10+ ms stalls.
+- My 100 Hz Python loop shows up to about 5 ms of jitter on a desktop, but
+  only after I moved IK planning into a separate process. While planning ran
+  in a controller thread, it held the GIL and stalled the loop by up to
+  142 ms. On a loaded embedded computer, GC pauses and GIL contention will
+  cause stalls like that again.
 - With the GUI and other nodes on the same machine, DDS traffic and rendering
   compete for the CPU.
 
