@@ -11,7 +11,8 @@ Interfaces
     Action      /pick_place     planar_arm_interfaces/PickPlace (feedback + cancel)
     Parameters  control_mode (position|velocity|effort, switchable while idle),
                 backend, control_rate_hz, publish_rate_hz, max_joint_velocity,
-                max_joint_acceleration, gripper_dwell_s, sim_noise_std, ...
+                max_joint_acceleration, approach_height, gripper_dwell_s,
+                sim_noise_std, ...
 
 Threading
     MultiThreadedExecutor with three callback groups:
@@ -47,6 +48,7 @@ from planar_arm_control.hardware_interface import ControlMode, make_backend
 from planar_arm_control.motion_planner import MotionPlanner
 # The provided kinematics library — do not modify it.
 from planar_arm_control.planar_arm import PlanarArm
+from planar_arm_control.planning_worker import PlanningWorker
 from planar_arm_control.tracking import TrackingController
 from planar_arm_interfaces.action import PickPlace
 from planar_arm_interfaces.msg import ArmStatus
@@ -75,6 +77,9 @@ class ControllerNode(Node):
         self.declare_parameter("max_joint_acceleration", 2.0)   # rad/s^2
         self.declare_parameter("initial_positions", [np.pi / 2, 0.0, 0.0])
         self.declare_parameter("gripper_dwell_s", 0.5)
+        self.declare_parameter("approach_height", 0.5)          # 0 disables
+        self.declare_parameter("settle_tolerance", 0.01)        # m, EE "in position"
+        self.declare_parameter("settle_timeout_s", 2.0)
         self.declare_parameter("sim_noise_std", 0.0)            # rad
 
         gp = lambda name: self.get_parameter(name).value  # noqa: E731
@@ -83,7 +88,10 @@ class ControllerNode(Node):
         q0 = np.asarray(gp("initial_positions"), float)
 
         # -- core objects (ROS-free) -----------------------------------------
-        self.planner = MotionPlanner(self.arm, gp("max_joint_velocity"),
+        # Local planner for cheap queries (home pose); all IK-heavy planning
+        # goes through a worker process so it can't stall the control loop.
+        self.planner = MotionPlanner(self.arm)
+        self.worker = PlanningWorker(LINK_LENGTHS, gp("max_joint_velocity"),
                                      gp("max_joint_acceleration"))
         backend_kwargs = {}
         if gp("backend") == "sim":
@@ -239,7 +247,7 @@ class ControllerNode(Node):
             self.state = "MOVING"
 
     def _plan_cartesian(self, xy, duration=None):
-        result = self.planner.plan(xy, self._current_q(), duration)
+        result = self.worker.plan(xy, self._current_q(), duration)
         with self.lock:
             self.requested_target = result.requested
             self.active_target = result.target
@@ -276,8 +284,38 @@ class ControllerNode(Node):
                 return "canceled"
             on_progress(progress)
             if not moving:
-                return "done"
+                return self._wait_settled(goal_handle)
             time.sleep(0.05)
+        return "aborted"
+
+    def _wait_settled(self, goal_handle):
+        """
+        Wait until the measured arm is "in position" at the end of a motion.
+
+        The trajectory finishing on the clock does not mean the arm is there:
+        in effort mode the tracking lag at the end of a short, brisk move was
+        ~0.1 m. Closing the gripper before settling would miss the part. This
+        is the equivalent of polling a servo's "Moving" / in-position flag.
+        """
+        tolerance = self.get_parameter("settle_tolerance").value
+        deadline = time.monotonic() + self.get_parameter("settle_timeout_s").value
+        while rclpy.ok():
+            with self.lock:
+                reading, q_ref = self.reading, self.q_ref.copy()
+                abort = self.abort_requested
+            if abort:
+                return "aborted"
+            if goal_handle.is_cancel_requested:
+                self._freeze("pick-and-place canceled")
+                return "canceled"
+            error = np.linalg.norm(np.subtract(self.arm.end_effector(reading.position),
+                                               self.arm.end_effector(q_ref)))
+            if error < tolerance and np.max(np.abs(reading.velocity)) < 0.05:
+                return "done"
+            if time.monotonic() > deadline:
+                self.get_logger().warn(f"arm did not settle (error {error:.3f} m); continuing")
+                return "done"
+            time.sleep(0.02)
         return "aborted"
 
     def _freeze(self, reason):
@@ -318,7 +356,7 @@ class ControllerNode(Node):
             response.success = False
             response.message = "Arm is busy; stop the current motion first."
             return response
-        traj, _ = self.planner.plan_joint(self._current_q(), self.planner.home_q)
+        traj, _ = self.worker.plan_joint(self._current_q(), self.planner.home_q)
         if traj is None:
             response.success, response.message = False, "No safe path to home"
             return response
@@ -363,9 +401,9 @@ class ControllerNode(Node):
                 return SetParametersResult(
                     successful=False, reason=f"{p.name} is fixed at startup")
             elif p.name == "max_joint_velocity":
-                self.planner.max_velocity = float(p.value)
+                self.worker.max_velocity = float(p.value)
             elif p.name == "max_joint_acceleration":
-                self.planner.max_acceleration = float(p.value)
+                self.worker.max_acceleration = float(p.value)
         return SetParametersResult(successful=True)
 
     # ======================================================================
@@ -377,13 +415,37 @@ class ControllerNode(Node):
             return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
+    def _approach_point(self, xy):
+        """Hover point above xy, or None if approach moves are off or infeasible."""
+        height = self.get_parameter("approach_height").value
+        if height <= 0.0:
+            return None
+        above = np.asarray(xy, float) + np.array([0.0, height])
+        check = self.worker.solve_ik(above, self._current_q())
+        if not check.ok or check.projected:
+            self.get_logger().warn(
+                f"approach point ({above[0]:.2f}, {above[1]:.2f}) unreachable; "
+                "moving to the target directly")
+            return None
+        return above
+
+    def _plan_line(self, xy):
+        """Straight-line Cartesian move; falls back to a joint-space move."""
+        result = self.worker.plan_line(xy, self._current_q())
+        if result.ok:
+            with self.lock:
+                self.requested_target = result.requested
+                self.active_target = result.target
+                self.target_projected = False
+            return result
+        self.get_logger().warn(f"straight-line move failed ({result.message}); "
+                               "using a joint-space move")
+        return self._plan_cartesian(xy)
+
     def execute_pick_place(self, goal_handle):
         goal = goal_handle.request
         pick = np.array([goal.pick.x, goal.pick.y])
         place = np.array([goal.place.x, goal.place.y])
-        phases = ["MOVE_TO_PICK", "PICK", "MOVE_TO_PLACE", "PLACE"]
-        if goal.return_home:
-            phases.append("RETURN_HOME")
         result = PickPlace.Result()
         feedback = PickPlace.Feedback()
 
@@ -401,22 +463,13 @@ class ControllerNode(Node):
                 self.get_logger().warn(f"pick-and-place: {message}")
             return result
 
-        def report(index, phase_progress):
-            with self.lock:
-                self.phase = phases[index]
-                ee = self.arm.end_effector(self.reading.position)
-            feedback.phase = phases[index]
-            feedback.progress = (index + phase_progress) / len(phases)
-            feedback.end_effector = point(ee)
-            goal_handle.publish_feedback(feedback)
-
         # Validate both targets before moving: picking at a *projected* point
         # would grasp thin air, so an unreachable pick/place is an error here
         # (unlike a plain move, which goes to the closest reachable point).
-        pick_check = self.planner.solve_ik(pick, self._current_q())
+        pick_check = self.worker.solve_ik(pick, self._current_q())
         checks = [("pick", pick_check)]
         if pick_check.ok:
-            checks.append(("place", self.planner.solve_ik(place, pick_check.q_goal)))
+            checks.append(("place", self.worker.solve_ik(place, pick_check.q_goal)))
         for name, check in checks:
             if not check.ok or check.projected:
                 with self.lock:
@@ -426,6 +479,37 @@ class ControllerNode(Node):
                 return finish(False, f"{name} target unreachable. {check.message}",
                               "abort")
 
+        # The sequence as data: (phase, action, argument). With an approach
+        # height the tool hovers above each point and moves in and out along
+        # a straight vertical line, so it never sweeps sideways into the part.
+        pick_above, place_above = self._approach_point(pick), self._approach_point(place)
+        steps = []
+        if pick_above is not None:
+            steps += [("MOVE_TO_PICK", "move", pick_above),
+                      ("DESCEND_TO_PICK", "line", pick),
+                      ("PICK", "grip", True),
+                      ("LIFT", "line", pick_above)]
+        else:
+            steps += [("MOVE_TO_PICK", "move", pick), ("PICK", "grip", True)]
+        if place_above is not None:
+            steps += [("MOVE_TO_PLACE", "move", place_above),
+                      ("DESCEND_TO_PLACE", "line", place),
+                      ("PLACE", "grip", False),
+                      ("RETREAT", "line", place_above)]
+        else:
+            steps += [("MOVE_TO_PLACE", "move", place), ("PLACE", "grip", False)]
+        if goal.return_home:
+            steps.append(("RETURN_HOME", "home", None))
+
+        def report(index, phase_progress):
+            with self.lock:
+                self.phase = steps[index][0]
+                ee = self.arm.end_effector(self.reading.position)
+            feedback.phase = steps[index][0]
+            feedback.progress = (index + phase_progress) / len(steps)
+            feedback.end_effector = point(ee)
+            goal_handle.publish_feedback(feedback)
+
         with self.lock:
             self.action_active = True
             self.abort_requested = False
@@ -433,26 +517,10 @@ class ControllerNode(Node):
             self.object_attached = False
             self.gripper_closed = False
 
-        for i, phase in enumerate(phases):
+        for i, (phase, kind, arg) in enumerate(steps):
             report(i, 0.0)
-            if phase in ("MOVE_TO_PICK", "MOVE_TO_PLACE", "RETURN_HOME"):
-                if phase == "RETURN_HOME":
-                    traj, _ = self.planner.plan_joint(self._current_q(),
-                                                      self.planner.home_q)
-                    ok, why = traj is not None, "no safe path home"
-                else:
-                    plan = self._plan_cartesian(pick if phase == "MOVE_TO_PICK" else place)
-                    traj, ok, why = plan.trajectory, plan.ok, plan.message
-                if not ok:
-                    return finish(False, f"{phase} failed: {why}", "abort")
-                self._start(traj)
-                outcome = self._wait_for_motion(goal_handle, lambda p: report(i, p))
-                if outcome == "canceled":
-                    return finish(False, "canceled by operator", "canceled")
-                if outcome == "aborted":
-                    return finish(False, "aborted by STOP", "abort")
-            else:
-                closing = phase == "PICK"
+            if kind == "grip":
+                closing = arg
                 with self.lock:
                     self.gripper_closed = closing
                     ee = np.array(self.arm.end_effector(self.reading.position))
@@ -465,6 +533,22 @@ class ControllerNode(Node):
                 if goal_handle.is_cancel_requested:
                     self._freeze("pick-and-place canceled")
                     return finish(False, "canceled by operator", "canceled")
+            else:
+                if kind == "home":
+                    traj, _ = self.worker.plan_joint(self._current_q(),
+                                                     self.planner.home_q)
+                    ok, why = traj is not None, "no safe path home"
+                else:
+                    plan = self._plan_line(arg) if kind == "line" else self._plan_cartesian(arg)
+                    traj, ok, why = plan.trajectory, plan.ok, plan.message
+                if not ok:
+                    return finish(False, f"{phase} failed: {why}", "abort")
+                self._start(traj)
+                outcome = self._wait_for_motion(goal_handle, lambda p: report(i, p))
+                if outcome == "canceled":
+                    return finish(False, "canceled by operator", "canceled")
+                if outcome == "aborted":
+                    return finish(False, "aborted by STOP", "abort")
             report(i, 1.0)
 
         return finish(True, f"placed object at ({place[0]:.2f}, {place[1]:.2f})",
@@ -473,6 +557,7 @@ class ControllerNode(Node):
     def destroy_node(self):
         self.backend.disable()
         self.backend.close()
+        self.worker.close()
         super().destroy_node()
 
 

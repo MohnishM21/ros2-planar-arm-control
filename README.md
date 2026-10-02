@@ -39,12 +39,21 @@ ros2 launch planar_arm_control bringup.launch.py gui:=false            # headles
 
 Launch arguments: `control_mode` (position|velocity|effort), `backend` (sim),
 `control_rate_hz` (100), `publish_rate_hz` (50), `max_joint_velocity` (1.0 rad/s),
-`max_joint_acceleration` (2.0 rad/s²), `sim_noise_std` (0 rad), `gui` (true).
+`max_joint_acceleration` (2.0 rad/s²), `approach_height` (0.5; 0 disables
+approach/retreat), `sim_noise_std` (0 rad), `gui` (true).
 
 ### Fixed test scenario
 
 In the GUI the fields come pre-filled: **Run pick & place** runs pick (4, 2) →
-place (−3, 3). **Move to target** with (7, 3) runs the edge case. From a terminal:
+place (−3, 3). **Move to target** with (7, 3) runs the edge case.
+
+The pick-and-place sequence:
+1. Move to a point 0.5 above the object, then descend in a **straight vertical line**.
+2. Wait until the arm has settled ("in position"), then grip.
+3. Lift straight up, move to above the place point, and descend.
+4. Release and retreat upward.
+
+From a terminal:
 
 ```bash
 ros2 action send_goal --feedback /pick_place planar_arm_interfaces/action/PickPlace \
@@ -83,8 +92,11 @@ src/
 └── planar_arm_control/             ament_python
     ├── planar_arm_control/
     │   ├── planar_arm.py           PROVIDED kinematics (unmodified)
-    │   ├── trajectory.py           quintic joint trajectories, via-point chains
-    │   ├── motion_planner.py       workspace projection, IK validation, ground-safe paths
+    │   ├── trajectory.py           quintic joint trajectories, via-point chains, dense paths
+    │   ├── motion_planner.py       workspace projection, IK validation, ground-safe paths,
+    │   │                           straight-line Cartesian moves
+    │   ├── planning_worker.py      runs the planner in a separate process (keeps the GIL
+    │   │                           away from the control loop)
     │   ├── pid.py                  vectorised PID (anti-windup, D on velocity error)
     │   ├── tracking.py             reference -> position / velocity / effort command
     │   ├── hardware_interface.py   ArmBackend ABC, SimulatedArm, DynamixelBackend skeleton
@@ -102,6 +114,10 @@ Everything below `controller_node.py` / `gui_node.py` is ROS-free and tested on 
 colcon test --packages-select planar_arm_control && colcon test-result --verbose
 ```
 
-There are 25 unit tests and 1 launch test. The launch test starts the real
-controller in effort mode and runs the fixed scenario, the unreachable pick and
-the projected move over ROS.
+There are 28 unit tests, 2 lint tests (ament flake8 + pep257) and 1 launch
+test. The launch test starts the real controller in effort mode and runs the
+fixed scenario, the unreachable pick and the projected move over ROS.
+
+Lint uses ament's config with two deviations, documented in `flake8.ini`:
+- double quotes are allowed, to match the provided starter code
+- the provided `planar_arm.py` is excluded, since it must not be modified

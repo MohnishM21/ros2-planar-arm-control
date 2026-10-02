@@ -68,9 +68,12 @@ class TestController(unittest.TestCase):
         result = self.run_pick_place((4.0, 2.0), (-3.0, 3.0))
         self.assertTrue(result.success, result.message)
         st = self.latest_status()
-        self.assertAlmostEqual(st.end_effector.x, -3.0, delta=0.01)
-        self.assertAlmostEqual(st.end_effector.y, 3.0, delta=0.01)
+        # Object left at the place point; tool retreated 0.5 straight above it.
         self.assertAlmostEqual(st.object_position.x, -3.0, delta=0.01)
+        self.assertAlmostEqual(st.object_position.y, 3.0, delta=0.01)
+        self.assertAlmostEqual(st.end_effector.x, -3.0, delta=0.01)
+        self.assertAlmostEqual(st.end_effector.y, 3.5, delta=0.01)
+        self.assertFalse(st.gripper_closed)
 
     def test_2_unreachable_pick_is_aborted(self):
         result = self.run_pick_place((7.0, 3.0), (-3.0, 3.0), timeout=10.0)

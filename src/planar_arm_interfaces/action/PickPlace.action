@@ -1,4 +1,6 @@
 # Full pick-and-place: move -> pick -> move -> place (-> home).
+# With approach_height > 0 the tool hovers above each point and descends /
+# lifts along a straight vertical line.
 geometry_msgs/Point pick
 geometry_msgs/Point place
 bool return_home
@@ -6,6 +8,7 @@ bool return_home
 bool success
 string message
 ---
-string phase        # MOVE_TO_PICK | PICK | MOVE_TO_PLACE | PLACE | RETURN_HOME
+string phase        # MOVE_TO_PICK | DESCEND_TO_PICK | PICK | LIFT | MOVE_TO_PLACE |
+                    # DESCEND_TO_PLACE | PLACE | RETREAT | RETURN_HOME
 float64 progress    # 0..1 over the whole sequence
 geometry_msgs/Point end_effector

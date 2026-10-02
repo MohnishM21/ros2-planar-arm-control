@@ -24,6 +24,8 @@ def generate_launch_description():
         DeclareLaunchArgument("max_joint_velocity", default_value="1.0"),
         DeclareLaunchArgument("max_joint_acceleration", default_value="2.0"),
         DeclareLaunchArgument("sim_noise_std", default_value="0.0"),
+        DeclareLaunchArgument("approach_height", default_value="0.5",
+                              description="hover height above pick/place; 0 disables"),
         DeclareLaunchArgument("gui", default_value="true"),
     ]
     lc = LaunchConfiguration
@@ -41,6 +43,7 @@ def generate_launch_description():
             "max_joint_velocity": lc("max_joint_velocity"),
             "max_joint_acceleration": lc("max_joint_acceleration"),
             "sim_noise_std": lc("sim_noise_std"),
+            "approach_height": lc("approach_height"),
         }],
     )
     gui = Node(

@@ -67,3 +67,30 @@ def test_unsafe_direct_path_is_routed_via_home(planner):
     r = planner.plan((2.0, 0.0), stretched)
     assert r.ok and r.via_home
     assert planner.path_valid(r.trajectory)
+
+
+def test_vertical_approach_is_a_straight_line(planner):
+    above = planner.plan((4.0, 2.5), HOME).q_goal
+    r = planner.plan_line((4.0, 2.0), above)
+    assert r.ok
+    for q in r.trajectory.sample_positions(300):
+        x, y = planner.arm.end_effector(q)
+        assert x == pytest.approx(4.0, abs=1e-3)
+        assert 2.0 - 1e-3 <= y <= 2.5 + 1e-3
+        assert planner.arm.within_joint_limits(q) and planner.arm.arm_above_base(q)
+    np.testing.assert_allclose(planner.arm.end_effector(r.q_goal), (4.0, 2.0), atol=1e-4)
+
+
+def test_line_respects_velocity_and_acceleration_limits(planner):
+    above = planner.plan((-3.0, 3.5), HOME).q_goal
+    traj = planner.plan_line((-3.0, 3.0), above).trajectory
+    ts = np.linspace(0.0, traj.duration, 1000)
+    assert max(np.max(np.abs(traj.sample(t)[1])) for t in ts) <= planner.max_velocity + 1e-6
+    # Finite-difference path derivatives: allow a small numerical margin.
+    assert max(np.max(np.abs(traj.sample(t)[2])) for t in ts) <= planner.max_acceleration * 1.05
+
+
+def test_line_leaving_workspace_is_rejected(planner):
+    edge = planner.plan((6.0, 1.0), HOME).q_goal
+    r = planner.plan_line((7.0, 1.0), edge)
+    assert not r.ok and "workspace" in r.message

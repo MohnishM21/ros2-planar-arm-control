@@ -7,7 +7,8 @@
  ┌───────────────────────────┐            ┌──────────────────────────────────────────────┐
  │ Qt main thread            │  /move_to_target, /home, /stop, /pick_place (action)        │
  │  widgets, QTimer @30 Hz ──┼──────────▶ │ commands group (reentrant)                   │
- │  ▲ queued Qt signals      │            │   MotionPlanner ── IK + validation + path    │
+ │  ▲ queued Qt signals      │            │   PlanningWorker (separate process)          │
+ │  │                        │            │     MotionPlanner ── IK + validation + path  │
  │  │ TelemetryBuffer (lock) │            │        │ QuinticTrajectory                   │
  │ ROS thread (executor) ◀───┼─────────── │ control group  @100 Hz                       │
  │  subscriptions            │ /joint_states  trajectory.sample → TrackingController     │
@@ -40,8 +41,14 @@ GroupSyncWrite per tick. The skeleton documents the register mapping.
   renders from, so render rate doesn't depend on message rate. One-off events
   (service and action replies) cross into Qt as queued signals. Outgoing calls
   are all `*_async`.
-- *Measured:* 100 Hz loop at 10.00 ms mean period, about 0.5–2 ms worst-case
-  jitter with the GUI running. GUI at 30 fps, `/joint_states` at 50 Hz.
+- *Planning runs in a separate process.* IK is CPU-heavy Python, and run in a
+  thread it holds the GIL. I measured worst-case control-loop stalls of
+  **19 ms** for a plain pick-and-place and **142 ms** once straight-line moves
+  were added. Moving `MotionPlanner` into a single-worker
+  `ProcessPoolExecutor` (spawn context) brought that down to **~4–5 ms**. The
+  command thread just blocks on a future, which releases the GIL.
+- *Measured:* 100 Hz loop at 10.0 ms mean period, ≤ 5 ms worst-case jitter
+  during a full pick-and-place. GUI at 30 fps, `/joint_states` at 50 Hz.
 
 ## Key decisions and trade-offs
 
@@ -57,6 +64,19 @@ GroupSyncWrite per tick. The skeleton documents the register mapping.
   fails too, the move is rejected. A Cartesian straight-line planner would be
   smoother for the end-effector but needs per-step IK with branch consistency,
   so I left it out of scope.
+- **Approach, grasp and retreat follow a straight line.** The tool hovers 0.5
+  above each point and descends and lifts in a straight vertical line, so it
+  never sweeps sideways into the part. The line is a dense IK path, each point
+  seeded with the previous solution so the solver stays on one consistent
+  branch; a joint jump of more than 0.15 rad between neighbours rejects the
+  line. That path is then time-scaled with the same quintic profile. If the
+  line fails, the planner falls back to a joint-space move.
+- **Grip only once the arm is in position.** The trajectory finishing on the
+  clock doesn't mean the arm is there: in effort mode the lag at the end of a
+  brisk 0.5 s descent was 0.11 m. The integration test caught this as a missed
+  grasp. The sequencer now waits for the hand to be within 1 cm of the target
+  and nearly still (with a timeout) before gripping, like polling a servo's
+  "Moving" flag.
 - **Unreachable targets are handled per use case.** A plain move goes to the
   projected boundary point and reports that it did. Pick-and-place rejects the
   goal up front, since grasping at a projected point is meaningless.
@@ -93,8 +113,6 @@ GroupSyncWrite per tick. The skeleton documents the register mapping.
 
 ## With more time
 
-- A Cartesian straight-line mode for the approach and retreat around pick and
-  place.
 - A Gazebo (`ros_gz`) backend behind the same `ArmBackend` interface.
 - A lifecycle node for configure/activate, mapping to torque on/off on hardware.
 - Gravity-compensation feed-forward from a model, instead of relying on the

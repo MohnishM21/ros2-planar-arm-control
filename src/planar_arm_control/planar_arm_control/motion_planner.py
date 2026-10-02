@@ -24,7 +24,8 @@ from typing import Optional
 
 import numpy as np
 
-from planar_arm_control.trajectory import QuinticTrajectory, TrajectoryChain
+from planar_arm_control.trajectory import (
+    JointPathTrajectory, QuinticTrajectory, TrajectoryChain)
 
 
 @dataclass
@@ -126,6 +127,41 @@ class MotionPlanner:
             return result
         result.trajectory = traj
         result.via_home = via_home
+        return result
+
+    def plan_line(self, xy_goal, q_current, step=0.02, max_joint_step=0.15):
+        """
+        Plan a straight Cartesian line from the current end-effector to xy_goal.
+
+        Used for the short vertical approach/retreat moves around a grasp,
+        where the tool must not swing sideways into the object. Each point is
+        solved with the previous solution as the IK seed, which keeps the
+        solver on one consistent branch; a joint jump larger than
+        max_joint_step between neighbours means a branch flip, and the line is
+        rejected rather than letting the arm whip around.
+        """
+        start = np.asarray(self.arm.end_effector(q_current), float)
+        goal = np.asarray(xy_goal, float)
+        result = PlanResult(False, "", goal, goal)
+        n = max(2, int(np.ceil(np.linalg.norm(goal - start) / step)) + 1)
+        path = [np.asarray(q_current, float)]
+        for point in np.linspace(start, goal, n)[1:]:
+            if point[1] < self.arm.min_y or np.linalg.norm(point) > self.max_reach:
+                result.message = "straight line leaves the workspace"
+                return result
+            with contextlib.redirect_stdout(io.StringIO()):
+                q = np.asarray(self.arm.inverse_kinematics(point, initial_guess=path[-1]))
+            error = np.linalg.norm(np.asarray(self.arm.end_effector(q)) - point)
+            if (not self.config_valid(q) or error > self.position_tolerance
+                    or np.max(np.abs(q - path[-1])) > max_joint_step):
+                result.message = (f"no continuous IK along the line at "
+                                  f"({point[0]:.2f}, {point[1]:.2f})")
+                return result
+            path.append(q)
+        T = JointPathTrajectory.min_duration(path, self.max_velocity, self.max_acceleration)
+        result.ok, result.message = True, "ok"
+        result.q_goal = path[-1]
+        result.trajectory = JointPathTrajectory(path, T)
         return result
 
     def _segment(self, q0, q1, duration):

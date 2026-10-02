@@ -92,3 +92,61 @@ class TrajectoryChain:
     def sample_positions(self, n=100):
         return [self.sample(t)[0]
                 for t in np.linspace(0.0, self.duration, n)]
+
+
+class JointPathTrajectory:
+    """
+    Follow a dense joint-space path (e.g. IK of a Cartesian line) in time.
+
+    The path is parameterised by s in [0, 1] (arc length of the source
+    Cartesian line), and s(t) uses the same quintic profile as
+    QuinticTrajectory, so the motion starts and ends at rest.
+    """
+
+    def __init__(self, q_path, duration):
+        self.q_path = np.asarray(q_path, dtype=float)
+        if self.q_path.ndim != 2 or len(self.q_path) < 2:
+            raise ValueError("q_path must be an (N >= 2, n_joints) array")
+        if duration <= 0.0:
+            raise ValueError("duration must be positive")
+        self.duration = float(duration)
+        self.s_grid = np.linspace(0.0, 1.0, len(self.q_path))
+        self.dq_ds = np.gradient(self.q_path, self.s_grid, axis=0)
+        self.d2q_ds2 = np.gradient(self.dq_ds, self.s_grid, axis=0)
+        self.q_start = self.q_path[0]
+        self.q_goal = self.q_path[-1]
+
+    @staticmethod
+    def min_duration(q_path, max_velocity, max_acceleration, floor=0.5):
+        """Shortest duration that keeps the path within vel/acc limits."""
+        q_path = np.asarray(q_path, dtype=float)
+        s = np.linspace(0.0, 1.0, len(q_path))
+        dq_ds = np.max(np.abs(np.gradient(q_path, s, axis=0)))
+        d2q_ds2 = np.max(np.abs(np.gradient(np.gradient(q_path, s, axis=0), s, axis=0)))
+        t_vel = QUINTIC_PEAK_VEL * dq_ds / max_velocity
+        # Bound both acceleration terms: d2q/ds2 * sdot^2 + dq/ds * sddot.
+        t_acc = np.sqrt((QUINTIC_PEAK_VEL ** 2 * d2q_ds2 + QUINTIC_PEAK_ACC * dq_ds)
+                        / max_acceleration)
+        return max(floor, t_vel, t_acc)
+
+    def _interp(self, table, s):
+        return np.array([np.interp(s, self.s_grid, table[:, j])
+                         for j in range(table.shape[1])])
+
+    def sample(self, t):
+        T = self.duration
+        tau = min(max(t / T, 0.0), 1.0)
+        s = 10 * tau**3 - 15 * tau**4 + 6 * tau**5
+        ds = (30 * tau**2 - 60 * tau**3 + 30 * tau**4) / T
+        dds = (60 * tau - 180 * tau**2 + 120 * tau**3) / T**2
+        dq_ds = self._interp(self.dq_ds, s)
+        return (self._interp(self.q_path, s),
+                dq_ds * ds,
+                self._interp(self.d2q_ds2, s) * ds**2 + dq_ds * dds)
+
+    def finished(self, t):
+        return t >= self.duration
+
+    def sample_positions(self, n=100):
+        return [self.sample(t)[0]
+                for t in np.linspace(0.0, self.duration, n)]
