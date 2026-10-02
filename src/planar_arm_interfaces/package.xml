@@ -4,7 +4,7 @@
   <name>planar_arm_interfaces</name>
   <version>0.1.0</version>
   <description>Messages, services and actions for the 3-DoF planar arm controller.</description>
-  <maintainer email="mp.mohnish@gmail.com">Mohnish</maintainer>
+  <maintainer email="mp.mohnish@gmail.com">Mohnish M</maintainer>
   <license>Proprietary — for evaluation use only</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
