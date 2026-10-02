@@ -1,0 +1,11 @@
+# Full pick-and-place: move -> pick -> move -> place (-> home).
+geometry_msgs/Point pick
+geometry_msgs/Point place
+bool return_home
+---
+bool success
+string message
+---
+string phase        # MOVE_TO_PICK | PICK | MOVE_TO_PLACE | PLACE | RETURN_HOME
+float64 progress    # 0..1 over the whole sequence
+geometry_msgs/Point end_effector

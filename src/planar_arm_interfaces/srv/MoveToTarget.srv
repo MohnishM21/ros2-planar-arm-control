@@ -1,0 +1,12 @@
+# Move the end-effector to (x, y) along a smooth joint-space trajectory.
+# Returns as soon as the motion is planned; motion runs asynchronously.
+float64 x
+float64 y
+float64 duration    # seconds; <= 0 lets the planner pick from velocity/accel limits
+---
+bool accepted
+bool reachable                       # false -> target was projected onto the workspace
+geometry_msgs/Point planned_target   # end-effector point the arm will actually reach
+float64[] goal_positions             # IK solution (rad)
+float64 duration
+string message
